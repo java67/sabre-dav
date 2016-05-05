@@ -5,6 +5,7 @@ CREATE TABLE calendarobjects (
     calendarid INTEGER NOT NULL,
     lastmodified INTEGER,
     etag VARCHAR(32),
+    scheduletag VARCHAR(32),
     size INTEGER NOT NULL,
     componenttype VARCHAR(8),
     firstoccurence INTEGER,

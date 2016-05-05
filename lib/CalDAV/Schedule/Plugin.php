@@ -27,6 +27,13 @@ use Sabre\DAV\Exception\Forbidden;
 use Sabre\DAV\Exception\BadRequest;
 use Sabre\DAV\Exception\NotImplemented;
 
+use Sabre\DAV;
+use Sabre\CalDAV;
+use Sabre\DAV\MkCol;
+use Sabre\HTTP;
+use Sabre\Uri;
+
+
 /**
  * CalDAV scheduling plugin.
  * =========================
@@ -103,6 +110,9 @@ class Plugin extends ServerPlugin {
 
         $this->server = $server;
         $server->on('method:POST',              [$this, 'httpPost']);
+        $server->on('afterMethod:GET',          [$this, 'httpAfterGet']);
+        $server->on('afterMethod:PUT',          [$this, 'httpAfterPut']);
+        $server->on('beforeWriteContent',       [$this, 'beforeWriteContent'], 50);
         $server->on('propFind',                 [$this, 'propFind']);
         $server->on('propPatch',                [$this, 'propPatch']);
         $server->on('calendarObjectChange',     [$this, 'calendarObjectChange']);
@@ -130,6 +140,35 @@ class Plugin extends ServerPlugin {
             $ns . 'schedule-default-calendar-URL'
         );
 
+    }
+
+    /**
+     * Returns the standard users' principal.
+     *
+     * This is one authorative principal url for the current user.
+     * This method will return null if the user wasn't logged in.
+     *
+     * @return string|null
+     */
+    function getCurrentUserPrincipalAlternateUriSet() {
+
+        /** @var $authPlugin Sabre\DAV\Auth\Plugin */
+        $authPlugin = $this->server->getPlugin('auth');
+        if (!$authPlugin) {
+            return null;
+        }
+        $currentUser=$authPlugin->getCurrentPrincipal();
+
+        $requestedProperties = [
+            '{DAV:}alternate-URI-set',
+        ];
+        $result = $this->server->getPropertiesForPath($currentUser, ['{DAV:}alternate-URI-set']);
+        $result = $result[0];
+
+        if (isset($result[200]['{DAV:}alternate-URI-set']))
+            return $result[200]['{DAV:}alternate-URI-set']->getHrefs();
+        
+        return null;
     }
 
     /**
@@ -192,6 +231,224 @@ class Plugin extends ServerPlugin {
         return false;
 
     }
+
+    /**
+     * This event is triggered after GET requests.
+     *
+     * This is used to add Schedule-Tag HTTP header.
+     *
+     * @param RequestInterface $request
+     * @param ResponseInterface $response
+     * @return void
+     */
+    function httpAfterGet(RequestInterface $request, ResponseInterface $response) {
+
+        $path = $request->getPath();
+        $node = $this->server->tree->getNodeForPath($path);
+
+        if (!$node instanceof ICalendarObject) return;
+
+        $scheduleTag = $node->getScheduleTag();
+        if (isset($scheduleTag))
+            $response->addHeader('Schedule-Tag', $scheduleTag);
+        
+        return;
+
+    }
+
+    /**
+     * This event is triggered after PUT requests.
+     *
+     * This is used to add Schedule-Tag HTTP header.
+     *
+     * @param RequestInterface $request
+     * @param ResponseInterface $response
+     * @return void
+     */
+    function httpAfterPut(RequestInterface $request, ResponseInterface $response) {
+
+        $path = $request->getPath();
+        $node = $this->server->tree->getNodeForPath($path);
+
+        if (!$node instanceof ICalendarObject) return;
+
+        $scheduleTag = $node->getScheduleTag();
+        if (isset($scheduleTag))
+            $response->addHeader('Schedule-Tag', $scheduleTag);
+        
+        return;
+
+    }
+
+
+
+    /**
+     * Merge a submitted iCalendar data $data with the PARTSTAT
+     * info from the existing calendar object $node.
+     *
+     * An exception is thrown if it's not.
+     *
+     * @param DAV\IFile $node
+     * @param resource|string $data
+     * @param string $path
+     * @param bool $modified Should be set to true, if this event handler
+     *                       changed &$data.
+     * @param RequestInterface $request The http request.
+     * @param ResponseInterface $response The http response.
+     * @param bool $isNew Is the item a new one, or an update.
+     * @return void
+     */
+    protected function mergeICalendarParticipationStatuses($node, &$data, $path, &$modified, RequestInterface $request, ResponseInterface $response) {
+
+        // If it's a stream, we convert it to a string first.
+        if (is_resource($data)) {
+            $data = stream_get_contents($data);
+        }
+
+        $before = $data;
+
+        try {
+
+            // If the data starts with a [, we can reasonably assume we're dealing
+            // with a jCal object.
+            if (substr($data, 0, 1) === '[') {
+                $newObj = VObject\Reader::readJson($data);
+
+                // Converting $data back to iCalendar, as that's what we
+                // technically support everywhere.
+                $data = $newObj->serialize();
+                $modified = true;
+            } else {
+                $newObj = VObject\Reader::read($data);
+            }
+
+            $srvObj = VObject\Reader::read($node->get());
+
+        } catch (VObject\ParseException $e) {
+
+            throw new DAV\Exception\UnsupportedMediaType('This resource only supports valid iCalendar 2.0 data. Parse error: ' . $e->getMessage());
+
+        }
+
+        if ($newObj->name !== 'VCALENDAR') {
+            throw new DAV\Exception\UnsupportedMediaType('This collection can only support iCalendar objects.');
+        }
+
+        // Actual merge:
+        // We are here because the user has done a PUT request,
+        // and the server may have processed some attendee
+        // participation status in the meantime (and only that).
+        // So we need to report these changes (except the user itself).
+
+        // We're not using setValue(). OK?
+        
+        // RFC6638: "the server
+        //  MUST take any "ATTENDEE" property changes for all "Attendees" other
+        //  than the owner of the scheduling object resource and apply those to
+        //  the new resource being stored"
+
+        // We're not using the $node owner as specified in RFC as it has no sense with shared calendars.
+        // A shared calendar user will attempt to change its own participation to the event, not the event owner participation.
+        // Doubt it will work with delegation however.
+        $currentUserAltUriSet = $this->getCurrentUserPrincipalAlternateUriSet();
+
+        if (isset($newObj->VEVENT->ORGANIZER) && isset($srvObj->VEVENT->ORGANIZER)) {
+            if (!in_array($newObj->VEVENT->ORGANIZER->getValue(), $currentUserAltUriSet)) {
+                if (isset($srvObj->VEVENT->ORGANIZER['SCHEDULE-STATUS']))
+                    $newObj->VEVENT->ORGANIZER['SCHEDULE-STATUS'] = $srvObj->VEVENT->ORGANIZER['SCHEDULE-STATUS'];
+                if (isset($srvObj->VEVENT->ORGANIZER['PARTSTAT']))
+                    $newObj->VEVENT->ORGANIZER['PARTSTAT'] = $srvObj->VEVENT->ORGANIZER['PARTSTAT'];
+                if (isset($srvObj->VEVENT->ORGANIZER['RSVP']))
+                    $newObj->VEVENT->ORGANIZER['RSVP'] = $srvObj->VEVENT->ORGANIZER['RSVP'];
+                else
+                    unset($newObj->VEVENT->ORGANIZER['RSVP']);
+                if (isset($srvObj->VEVENT->ORGANIZER['SCHEDULE-FORCE-SEND']))
+                    $newObj->VEVENT->ORGANIZER['SCHEDULE-FORCE-SEND'] = $srvObj->VEVENT->ORGANIZER['SCHEDULE-FORCE-SEND'];
+                else
+                    unset($newObj->VEVENT->ORGANIZER['SCHEDULE-FORCE-SEND']);
+            }
+        }
+
+        if (isset($newObj->VEVENT->ATTENDEE) && isset($srvObj->VEVENT->ATTENDEE)) {
+            foreach ($newObj->VEVENT->ATTENDEE as $nkey => $newObjAttendee) {
+                foreach ($srvObj->VEVENT->ATTENDEE as $skey => $srvObjAttendee) {
+                    if ($newObjAttendee->getNormalizedValue() === $srvObjAttendee->getNormalizedValue()) {
+                        if (!in_array($newObj->VEVENT->ATTENDEE[$nkey]->getValue(), $currentUserAltUriSet)) {
+
+                            if (isset($srvObj->VEVENT->ATTENDEE[$skey]['SCHEDULE-STATUS']))
+                                $newObj->VEVENT->ATTENDEE[$nkey]['SCHEDULE-STATUS'] = $srvObj->VEVENT->ATTENDEE[$skey]['SCHEDULE-STATUS'];
+                            if (isset($srvObj->VEVENT->ATTENDEE[$skey]['PARTSTAT']))
+                                $newObj->VEVENT->ATTENDEE[$nkey]['PARTSTAT'] = $srvObj->VEVENT->ATTENDEE[$skey]['PARTSTAT'];
+                            if (isset($srvObj->VEVENT->ATTENDEE[$skey]['RSVP']))
+                                $newObj->VEVENT->ATTENDEE[$nkey]['RSVP'] = $srvObj->VEVENT->ATTENDEE[$skey]['RSVP'];
+                            else
+                                unset($newObj->VEVENT->ATTENDEE[$nkey]['RSVP']);
+                            if (isset($srvObj->VEVENT->ATTENDEE[$skey]['SCHEDULE-FORCE-SEND']))
+                                $newObj->VEVENT->ATTENDEE[$nkey]['SCHEDULE-FORCE-SEND'] = $srvObj->VEVENT->ATTENDEE[$skey]['SCHEDULE-FORCE-SEND'];
+                            else
+                                unset($newObj->VEVENT->ATTENDEE[$nkey]['SCHEDULE-FORCE-SEND']);
+                        }
+                    }
+                }
+            }
+        }
+
+        $data = $newObj->serialize();
+        $modified = true;
+
+        // Destroy circular references so PHP will garbage collect the object.
+        $newObj->destroy();
+        //$srvObj->destroy();
+
+    }
+
+    /**
+     * This method is triggered before a file gets updated with new content.
+     *
+     * This plugin handles If-Schedule-Tag-Match Precondition and resolve
+     * PARTSTAT conflicts.
+     *
+     * @param string $path
+     * @param DAV\IFile $node
+     * @param resource $data
+     * @param bool $modified Should be set to true, if this event handler
+     *                       changed &$data.
+     * @return void
+     */
+    function beforeWriteContent($path, DAV\IFile $node, &$data, &$modified) {
+
+        if (!$node instanceof ICalendarObject)
+            return;
+
+        // We're only interested in ICalendarObject nodes that are inside of a
+        // real calendar. This is to avoid triggering validation and scheduling
+        // for non-calendars (such as an inbox).
+        list($parent) = Uri\split($path);
+        $parentNode = $this->server->tree->getNodeForPath($parent);
+
+        if (!$parentNode instanceof ICalendar)
+            return;
+
+        if ($ifMatch = $this->server->httpRequest->getHeader('If-Schedule-Tag-Match')) {
+            
+            // If-Schedule-Tag-Match precondition failed
+            if ($ifMatch != $node->getScheduleTag())
+                throw new Sabre\DAV\Exception\PreconditionFailed('An If-Schedule-Tag-Match header was specified, but doesn\'t match.', 'If-Schedule-Tag-Match');
+
+            // Merge current calendar object PARTSTAT with new object PARTSTAT
+            else {
+                $this->mergeICalendarParticipationStatuses(
+                    $node,
+                    $data,
+                    $path,
+                    $modified,
+                    $this->server->httpRequest,
+                    $this->server->httpResponse
+                );
+            }
+        }
+    }
+
 
     /**
      * This method handler is invoked during fetching of properties.
@@ -280,6 +537,17 @@ class Plugin extends ServerPlugin {
             $propFind->handle('{' . self::NS_CALDAV . '}calendar-user-type', function() {
 
                 return 'INDIVIDUAL';
+
+            });
+
+        }
+
+        if ($node instanceof ICalendarObject) {
+
+            // schedule-tag property
+            $propFind->handle('{' . self::NS_CALDAV . '}schedule-tag', function() use ($propFind, $node) {
+
+                return $node->getScheduleTag();
 
             });
 
@@ -567,7 +835,7 @@ class Plugin extends ServerPlugin {
                     [$iTipMessage->sender]
                 );
             }
-            $objectNode->put($newObject->serialize());
+            $objectNode->put($newObject->serialize(), FALSE);
         }
         $iTipMessage->scheduleStatus = '1.2;Message delivered locally';
 

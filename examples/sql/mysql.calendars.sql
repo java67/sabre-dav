@@ -5,6 +5,7 @@ CREATE TABLE calendarobjects (
     calendarid INTEGER UNSIGNED NOT NULL,
     lastmodified INT(11) UNSIGNED,
     etag VARBINARY(32),
+    scheduletag VARBINARY(32),
     size INT(11) UNSIGNED NOT NULL,
     componenttype VARBINARY(8),
     firstoccurence INT(11) UNSIGNED,

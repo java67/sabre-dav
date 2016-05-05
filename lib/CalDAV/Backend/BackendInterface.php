@@ -180,9 +180,10 @@ interface BackendInterface {
      * @param mixed $calendarId
      * @param string $objectUri
      * @param string $calendarData
+     * @param optional bool $updateScheduleTag
      * @return string|null
      */
-    function updateCalendarObject($calendarId, $objectUri, $calendarData);
+    function updateCalendarObject($calendarId, $objectUri, $calendarData, $updateScheduleTag = TRUE);
 
     /**
      * Deletes an existing calendar object.

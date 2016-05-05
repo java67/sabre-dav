@@ -96,14 +96,15 @@ class CalendarObject extends \Sabre\DAV\File implements ICalendarObject, \Sabre\
      * Updates the ICalendar-formatted object
      *
      * @param string|resource $calendarData
+     * @param optional bool $updateScheduleTag
      * @return string
      */
-    function put($calendarData) {
+    function put($calendarData, $updateScheduleTag = TRUE) {
 
         if (is_resource($calendarData)) {
             $calendarData = stream_get_contents($calendarData);
         }
-        $etag = $this->caldavBackend->updateCalendarObject($this->calendarInfo['id'], $this->objectData['uri'], $calendarData);
+        $etag = $this->caldavBackend->updateCalendarObject($this->calendarInfo['id'], $this->objectData['uri'], $calendarData, $updateScheduleTag);
         $this->objectData['calendardata'] = $calendarData;
         $this->objectData['etag'] = $etag;
 
@@ -150,6 +151,23 @@ class CalendarObject extends \Sabre\DAV\File implements ICalendarObject, \Sabre\
             return $this->objectData['etag'];
         } else {
             return '"' . md5($this->get()) . '"';
+        }
+
+    }
+
+    /**
+     * Returns a schedule-tag for this object.
+     *
+     * The schedule-tag is an arbitrary string, but MUST be surrounded by double-quotes.
+     *
+     * @return string
+     */
+    function getScheduleTag() {
+
+        if (isset($this->objectData['schedule-tag'])) {
+            return $this->objectData['schedule-tag'];
+        } else {
+            return NULL;
         }
 
     }

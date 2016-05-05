@@ -432,7 +432,7 @@ SQL
         }
         list($calendarId, $instanceId) = $calendarId;
 
-        $stmt = $this->pdo->prepare('SELECT id, uri, lastmodified, etag, calendarid, size, componenttype FROM ' . $this->calendarObjectTableName . ' WHERE calendarid = ?');
+        $stmt = $this->pdo->prepare('SELECT id, uri, lastmodified, etag, scheduletag, calendarid, size, componenttype FROM ' . $this->calendarObjectTableName . ' WHERE calendarid = ?');
         $stmt->execute([$calendarId]);
 
         $result = [];
@@ -442,6 +442,7 @@ SQL
                 'uri'          => $row['uri'],
                 'lastmodified' => (int)$row['lastmodified'],
                 'etag'         => '"' . $row['etag'] . '"',
+                'schedule-tag' => '"' . $row['scheduletag'] . '"',
                 'size'         => (int)$row['size'],
                 'component'    => strtolower($row['componenttype']),
             ];
@@ -474,7 +475,7 @@ SQL
         }
         list($calendarId, $instanceId) = $calendarId;
 
-        $stmt = $this->pdo->prepare('SELECT id, uri, lastmodified, etag, calendarid, size, calendardata, componenttype FROM ' . $this->calendarObjectTableName . ' WHERE calendarid = ? AND uri = ?');
+        $stmt = $this->pdo->prepare('SELECT id, uri, lastmodified, etag, scheduletag, calendarid, size, calendardata, componenttype FROM ' . $this->calendarObjectTableName . ' WHERE calendarid = ? AND uri = ?');
         $stmt->execute([$calendarId, $objectUri]);
         $row = $stmt->fetch(\PDO::FETCH_ASSOC);
 
@@ -485,6 +486,7 @@ SQL
             'uri'           => $row['uri'],
             'lastmodified'  => (int)$row['lastmodified'],
             'etag'          => '"' . $row['etag'] . '"',
+            'schedule-tag'  => '"' . $row['scheduletag'] . '"',
             'size'          => (int)$row['size'],
             'calendardata'  => $row['calendardata'],
             'component'     => strtolower($row['componenttype']),
@@ -511,7 +513,7 @@ SQL
         }
         list($calendarId, $instanceId) = $calendarId;
 
-        $query = 'SELECT id, uri, lastmodified, etag, calendarid, size, calendardata, componenttype FROM ' . $this->calendarObjectTableName . ' WHERE calendarid = ? AND uri IN (';
+        $query = 'SELECT id, uri, lastmodified, etag, scheduletag, calendarid, size, calendardata, componenttype FROM ' . $this->calendarObjectTableName . ' WHERE calendarid = ? AND uri IN (';
         // Inserting a whole bunch of question marks
         $query .= implode(',', array_fill(0, count($uris), '?'));
         $query .= ')';
@@ -527,6 +529,7 @@ SQL
                 'uri'          => $row['uri'],
                 'lastmodified' => (int)$row['lastmodified'],
                 'etag'         => '"' . $row['etag'] . '"',
+                'schedule-tag' => '"' . $row['scheduletag'] . '"',
                 'size'         => (int)$row['size'],
                 'calendardata' => $row['calendardata'],
                 'component'    => strtolower($row['componenttype']),
@@ -565,13 +568,14 @@ SQL
 
         $extraData = $this->getDenormalizedData($calendarData);
 
-        $stmt = $this->pdo->prepare('INSERT INTO ' . $this->calendarObjectTableName . ' (calendarid, uri, calendardata, lastmodified, etag, size, componenttype, firstoccurence, lastoccurence, uid) VALUES (?,?,?,?,?,?,?,?,?,?)');
+        $stmt = $this->pdo->prepare('INSERT INTO ' . $this->calendarObjectTableName . ' (calendarid, uri, calendardata, lastmodified, etag, scheduletag, size, componenttype, firstoccurence, lastoccurence, uid) VALUES (?,?,?,?,?,?,?,?,?,?,?)');
         $stmt->execute([
             $calendarId,
             $objectUri,
             $calendarData,
             time(),
             $extraData['etag'],
+            \Sabre\DAV\UUIDUtil::getUUID(),
             $extraData['size'],
             $extraData['componentType'],
             $extraData['firstOccurence'],
@@ -600,9 +604,10 @@ SQL
      * @param mixed $calendarId
      * @param string $objectUri
      * @param string $calendarData
+     * @param optional bool $updateScheduleTag
      * @return string|null
      */
-    function updateCalendarObject($calendarId, $objectUri, $calendarData) {
+    function updateCalendarObject($calendarId, $objectUri, $calendarData, $updateScheduleTag = TRUE) {
 
         if (!is_array($calendarId)) {
             throw new \InvalidArgumentException('The value passed to $calendarId is expected to be an array with a calendarId and an instanceId');
@@ -611,9 +616,13 @@ SQL
 
         $extraData = $this->getDenormalizedData($calendarData);
 
-        $stmt = $this->pdo->prepare('UPDATE ' . $this->calendarObjectTableName . ' SET calendardata = ?, lastmodified = ?, etag = ?, size = ?, componenttype = ?, firstoccurence = ?, lastoccurence = ?, uid = ? WHERE calendarid = ? AND uri = ?');
-        $stmt->execute([$calendarData, time(), $extraData['etag'], $extraData['size'], $extraData['componentType'], $extraData['firstOccurence'], $extraData['lastOccurence'], $extraData['uid'], $calendarId, $objectUri]);
-
+        if ($updateScheduleTag) {
+            $stmt = $this->pdo->prepare('UPDATE ' . $this->calendarObjectTableName . ' SET calendardata = ?, lastmodified = ?, etag = ?, scheduletag = ?, size = ?, componenttype = ?, firstoccurence = ?, lastoccurence = ?, uid = ? WHERE calendarid = ? AND uri = ?');
+            $stmt->execute([$calendarData, time(), $extraData['etag'], \Sabre\DAV\UUIDUtil::getUUID(), $extraData['size'], $extraData['componentType'], $extraData['firstOccurence'], $extraData['lastOccurence'], $extraData['uid'], $calendarId, $objectUri]);
+        } else {
+            $stmt = $this->pdo->prepare('UPDATE ' . $this->calendarObjectTableName . ' SET calendardata = ?, lastmodified = ?, etag = ?, size = ?, componenttype = ?, firstoccurence = ?, lastoccurence = ?, uid = ? WHERE calendarid = ? AND uri = ?');
+            $stmt->execute([$calendarData, time(), $extraData['etag'], $extraData['size'], $extraData['componentType'], $extraData['firstOccurence'], $extraData['lastOccurence'], $extraData['uid'], $calendarId, $objectUri]);
+        }
         $this->addChange($calendarId, $objectUri, 2);
 
         return '"' . $extraData['etag'] . '"';

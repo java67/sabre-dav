@@ -18,4 +18,13 @@ use Sabre\DAV;
  */
 interface ICalendarObject extends DAV\IFile {
 
+    /**
+     * Returns a schedule-tag for this object.
+     *
+     * The schedule-tag is an arbitrary string, but MUST be surrounded by double-quotes.
+     *
+     * @return string
+     */
+    function getScheduleTag();
+
 }

@@ -139,6 +139,16 @@ SELECT
     transparent
 FROM calendars
 ");
+
+// TODO: Same for sqlite
+            $pdo->exec("
+ALTER TABLE calendarobjects
+ADD scheduletag varbinary(32) AFTER etag
+");
+            $pdo->exec("
+UPDATE calendarobjects
+SET scheduletag = etag
+");
             break;
         case 'sqlite' :
             $pdo->exec(<<<SQL
