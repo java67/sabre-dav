@@ -159,9 +159,6 @@ class Plugin extends ServerPlugin {
         }
         $currentUser=$authPlugin->getCurrentPrincipal();
 
-        $requestedProperties = [
-            '{DAV:}alternate-URI-set',
-        ];
         $result = $this->server->getPropertiesForPath($currentUser, ['{DAV:}alternate-URI-set']);
         $result = $result[0];
 
@@ -398,7 +395,7 @@ class Plugin extends ServerPlugin {
 
         // Destroy circular references so PHP will garbage collect the object.
         $newObj->destroy();
-        //$srvObj->destroy();
+        $srvObj->destroy();
 
     }
 
@@ -433,7 +430,7 @@ class Plugin extends ServerPlugin {
             
             // If-Schedule-Tag-Match precondition failed
             if ($ifMatch != $node->getScheduleTag())
-                throw new Sabre\DAV\Exception\PreconditionFailed('An If-Schedule-Tag-Match header was specified, but doesn\'t match.', 'If-Schedule-Tag-Match');
+                throw new DAV\Exception\PreconditionFailed('An If-Schedule-Tag-Match header was specified, but doesn\'t match.', 'If-Schedule-Tag-Match');
 
             // Merge current calendar object PARTSTAT with new object PARTSTAT
             else {
