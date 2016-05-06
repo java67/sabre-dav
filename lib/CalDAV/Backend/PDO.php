@@ -25,6 +25,23 @@ class PDO extends AbstractBackend
         SchedulingSupport,
         SharingSupport {
 
+
+    /**
+     * Set restriction: Can only update named participant status
+     *
+     * Ignore all major database write operations except VEVENT PARTSTAT
+     * for the named participant.
+     * 
+     * $limitToParticipant is an array(0 => 'mailto:***@***.***', ...)
+     *
+     * @param array $limitToParticipant
+     */
+    public $limitToParticipant = NULL;
+    public function setLimitToParticipant($limitToParticipant) {
+        $this->limitToParticipant = $limitToParticipant;
+    }
+
+
     /**
      * We need to specify a max date, because we need to stop *somewhere*
      *
@@ -231,6 +248,9 @@ SQL
      */
     function createCalendar($principalUri, $calendarUri, array $properties) {
 
+        if (isset($this->limitToParticipant))
+            throw new DAV\Exception\Forbidden('Permission denied to create calendar');
+
         $fieldNames = [
             'principaluri',
             'uri',
@@ -307,6 +327,10 @@ SQL
         if (!is_array($calendarId)) {
             throw new \InvalidArgumentException('The value passed to $calendarId is expected to be an array with a calendarId and an instanceId');
         }
+
+        if (isset($this->limitToParticipant))
+            throw new DAV\Exception\Forbidden('Permission denied to update calendar');
+
         list($calendarId, $instanceId) = $calendarId;
 
         $supportedProperties = array_keys($this->propertyMap);
@@ -356,6 +380,10 @@ SQL
         if (!is_array($calendarId)) {
             throw new \InvalidArgumentException('The value passed to $calendarId is expected to be an array with a calendarId and an instanceId');
         }
+
+        if (isset($this->limitToParticipant))
+            throw new DAV\Exception\Forbidden('Permission denied to delete calendar');
+
         list($calendarId, $instanceId) = $calendarId;
 
         $stmt = $this->pdo->prepare('SELECT access FROM ' . $this->calendarInstancesTableName . ' where id = ?');
@@ -564,6 +592,10 @@ SQL
         if (!is_array($calendarId)) {
             throw new \InvalidArgumentException('The value passed to $calendarId is expected to be an array with a calendarId and an instanceId');
         }
+
+        if (isset($this->limitToParticipant))
+            throw new DAV\Exception\Forbidden('Permission denied to create new calendar object');
+
         list($calendarId, $instanceId) = $calendarId;
 
         $extraData = $this->getDenormalizedData($calendarData);
@@ -612,7 +644,57 @@ SQL
         if (!is_array($calendarId)) {
             throw new \InvalidArgumentException('The value passed to $calendarId is expected to be an array with a calendarId and an instanceId');
         }
+        $arg_calendarId=$calendarId;
         list($calendarId, $instanceId) = $calendarId;
+        
+        // Limit calendar object update to the participant status change of the authenticated user
+        if (isset($this->limitToParticipant)) {
+
+            // Parse existing VEVENT
+            $currentCalendarData = null;
+            $currentCalendarObject = $this->getCalendarObject($arg_calendarId, $objectUri);
+            if ($currentCalendarObject) {
+                $updateScheduleTag = FALSE;
+                $currentCalendarData = $currentCalendarObject['calendardata'];
+                $currentvObject = VObject\Reader::read($currentCalendarData);
+                
+                // Parse newer VEVENT
+                $newvObject = VObject\Reader::read($calendarData);
+
+                // Find authenticated user himself in existing VEVENT
+                foreach($currentvObject->VEVENT->ATTENDEE as &$currentattendee) {
+                    if(in_array($currentattendee->getValue(), $this->limitToParticipant)) {
+                        //echo "Attendee found: ".$this->limitToParticipant;
+
+                        // Find authenticated user himself in newer VEVENT
+                        foreach($newvObject->VEVENT->ATTENDEE as $newattendee) {
+                            //echo "New attendee getValue: ".($newattendee->getValue())."\n";
+                            if(in_array($newattendee->getValue(), $this->limitToParticipant)) {
+                                //print_r($newattendee);
+                                // Can't find another way to loop through attendees parameters...
+                                if (isset($newattendee->parameters['PARTSTAT'])) {
+                                    switch($newattendee->parameters['PARTSTAT']->getValue()) {
+                                        case "NEEDS-ACTION": // TODO RSVP specific
+                                        case "ACCEPTED":
+                                        case "DECLINED":
+                                        case "TENTATIVE":
+                                            if(isset($currentattendee->parameters['PARTSTAT'])) unset($currentattendee->parameters['PARTSTAT']);
+                                            if(isset($currentattendee->parameters['RSVP'])) unset($currentattendee->parameters['RSVP']);
+                                            if(isset($currentattendee->parameters['SCHEDULE-STATUS'])) unset($currentattendee->parameters['SCHEDULE-STATUS']);
+                                            if(isset($currentattendee->parameters['SCHEDULE-FORCE-SEND'])) unset($currentattendee->parameters['SCHEDULE-FORCE-SEND']);
+                                            $currentattendee->add('PARTSTAT', $newattendee->parameters['PARTSTAT']->getValue() );
+                                        break;
+                                        //default: echo "ERROR".__LINE__."\n"; break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            $calendarData = $currentvObject->serialize();
+        }
 
         $extraData = $this->getDenormalizedData($calendarData);
 
@@ -721,6 +803,9 @@ SQL
      * @return void
      */
     function deleteCalendarObject($calendarId, $objectUri) {
+
+        if (isset($this->limitToParticipant))
+            throw new DAV\Exception\Forbidden('Permission denied to delete calendar object');
 
         if (!is_array($calendarId)) {
             throw new \InvalidArgumentException('The value passed to $calendarId is expected to be an array with a calendarId and an instanceId');
@@ -1141,6 +1226,9 @@ SQL;
      */
     function createSubscription($principalUri, $uri, array $properties) {
 
+        if (isset($this->limitToParticipant))
+            throw new DAV\Exception\Forbidden('Permission denied to create subscription');
+
         $fieldNames = [
             'principaluri',
             'uri',
@@ -1194,6 +1282,9 @@ SQL;
      */
     function updateSubscription($subscriptionId, DAV\PropPatch $propPatch) {
 
+        if (isset($this->limitToParticipant))
+            throw new DAV\Exception\Forbidden('Permission denied to update subscription');
+
         $supportedProperties = array_keys($this->subscriptionPropertyMap);
         $supportedProperties[] = '{http://calendarserver.org/ns/}source';
 
@@ -1236,6 +1327,10 @@ SQL;
      * @return void
      */
     function deleteSubscription($subscriptionId) {
+
+
+        if (isset($this->limitToParticipant))
+            throw new DAV\Exception\Forbidden('Permission denied to delete subscription');
 
         $stmt = $this->pdo->prepare('DELETE FROM ' . $this->calendarSubscriptionsTableName . ' WHERE id = ?');
         $stmt->execute([$subscriptionId]);
@@ -1344,6 +1439,9 @@ SQL;
      * @return void
      */
     function updateInvites($calendarId, array $sharees) {
+
+        if (isset($this->limitToParticipant))
+            throw new DAV\Exception\Forbidden('Permission denied to update invites');
 
         if (!is_array($calendarId)) {
             throw new \InvalidArgumentException('The value passed to $calendarId is expected to be an array with a calendarId and an instanceId');

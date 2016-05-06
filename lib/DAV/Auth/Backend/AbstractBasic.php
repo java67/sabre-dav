@@ -50,6 +50,7 @@ abstract class AbstractBasic implements BackendInterface {
      */
     abstract protected function validateUserPass($username, $password);
 
+
     /**
      * Sets the authentication realm for this backend.
      *

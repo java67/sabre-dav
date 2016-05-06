@@ -52,6 +52,13 @@ class Plugin extends ServerPlugin {
     protected $currentPrincipal;
 
     /**
+     * Reference to main Server object.
+     *
+     * @var Server
+     */
+    protected $server;
+
+    /**
      * Creates the authentication plugin
      *
      * @param Backend\BackendInterface $authBackend
@@ -83,6 +90,8 @@ class Plugin extends ServerPlugin {
      * @return void
      */
     function initialize(Server $server) {
+
+        $this->server = $server;
 
         $server->on('beforeMethod', [$this, 'beforeMethod'], 10);
 
@@ -152,6 +161,11 @@ class Plugin extends ServerPlugin {
         if ($authResult[0]) {
             // Auth was successful
             $this->currentPrincipal = $authResult[1];
+            // User-defined method to set calendarBackend PDO $setLimitToParticipant
+            foreach ($this->backends as $backend) {
+                if(method_exists($backend, 'launchSetLimitToParticipant'))
+                    $backend->launchSetLimitToParticipant($this->currentPrincipal);
+            }
             $this->loginFailedReasons = null;
             return;
         }

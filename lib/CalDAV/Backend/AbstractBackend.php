@@ -15,6 +15,10 @@ use Sabre\CalDAV;
  * @license http://sabre.io/license/ Modified BSD License
  */
 abstract class AbstractBackend implements BackendInterface {
+    
+    public function setLimitToParticipant($limitToParticipant) {
+    }
+
 
     /**
      * Updates properties for a calendar.

@@ -76,6 +76,18 @@ class Plugin extends ServerPlugin {
     protected $server;
 
     /**
+     * Bypass privilege issues when creating events directly from the API (unauthenticated)
+     *
+     * @var bool bypassAuth
+     * @param bool bypassAuth
+     */
+    public $bypassAuth = false;
+    function setBypassAuth($bypassAuth) {
+        $this->bypassAuth = $bypassAuth;
+    }
+
+
+    /**
      * Returns a list of features for the DAV: HTTP header.
      *
      * @return array
@@ -769,7 +781,7 @@ class Plugin extends ServerPlugin {
             $privilege = 'schedule-deliver-invite';
         }
 
-        if (!$aclPlugin->checkPrivileges($inboxPath, $caldavNS . $privilege, DAVACL\Plugin::R_PARENT, false)) {
+        if (!$this->bypassAuth && !$aclPlugin->checkPrivileges($inboxPath, $caldavNS . $privilege, DAVACL\Plugin::R_PARENT, false)) {
             $iTipMessage->scheduleStatus = '3.8;insufficient privileges: ' . $privilege . ' is required on the recipient schedule inbox.';
             return;
         }
