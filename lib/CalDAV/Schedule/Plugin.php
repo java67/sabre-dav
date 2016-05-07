@@ -278,10 +278,13 @@ class Plugin extends ServerPlugin {
     }
 
 
+    protected static $significantproperties = array('DTSTART', 'DTEND', 'DUE', 'RDATE', 'RRULE', 'EXDATE', 'EXRULE', 'STATUS');
 
     /**
      * Merge a submitted iCalendar data $data with the PARTSTAT
-     * info from the existing calendar object $node.
+     * info from the existing calendar object $node (!$hasLatentException),
+     * or use the server version with only the new user partstat changed
+     * ($hasLatentException).
      *
      * An exception is thrown if it's not.
      *
@@ -292,10 +295,11 @@ class Plugin extends ServerPlugin {
      *                       changed &$data.
      * @param RequestInterface $request The http request.
      * @param ResponseInterface $response The http response.
-     * @param bool $isNew Is the item a new one, or an update.
-     * @return void
+     * @param bool $hasLatentException There is a latent Exception waiting
+    *                        to be thrown if the conflict's not solved.
+     * @return bool
      */
-    protected function mergeICalendarParticipationStatuses($node, &$data, $path, &$modified, RequestInterface $request, ResponseInterface $response) {
+    protected function mergeICalendar($node, &$data, $path, &$modified, RequestInterface $request, ResponseInterface $response, $hasLatentException) {
 
         // If it's a stream, we convert it to a string first.
         if (is_resource($data)) {
@@ -331,71 +335,147 @@ class Plugin extends ServerPlugin {
             throw new DAV\Exception\UnsupportedMediaType('This collection can only support iCalendar objects.');
         }
 
-        // Actual merge:
-        // We are here because the user has done a PUT request,
-        // and the server may have processed some attendee
-        // participation status in the meantime (and only that).
-        // So we need to report these changes (except the user itself).
-
-        // We're not using setValue(). OK?
+        // If there's a significant difference between the server and new event:
+        // - If there's a latent PreconditionFailed exception, return FALSE to throw the exception.
+        // - Otherwise, it means the organizer is updating the event,
+        //   so ATTENDEEs have to be reset: return TRUE to further process the significant update.
         
-        // RFC6638: "the server
-        //  MUST take any "ATTENDEE" property changes for all "Attendees" other
-        //  than the owner of the scheduling object resource and apply those to
-        //  the new resource being stored"
-
-        // We're not using the $node owner as specified in RFC as it has no sense with shared calendars.
-        // A shared calendar user will attempt to change its own participation to the event, not the event owner participation.
-        // Doubt it will work with delegation however.
-        $currentUserAltUriSet = $this->getCurrentUserPrincipalAlternateUriSet();
-
-        if (isset($newObj->VEVENT->ORGANIZER) && isset($srvObj->VEVENT->ORGANIZER)) {
-            if (!in_array($newObj->VEVENT->ORGANIZER->getValue(), $currentUserAltUriSet)) {
-                if (isset($srvObj->VEVENT->ORGANIZER['SCHEDULE-STATUS']))
-                    $newObj->VEVENT->ORGANIZER['SCHEDULE-STATUS'] = $srvObj->VEVENT->ORGANIZER['SCHEDULE-STATUS'];
-                if (isset($srvObj->VEVENT->ORGANIZER['PARTSTAT']))
-                    $newObj->VEVENT->ORGANIZER['PARTSTAT'] = $srvObj->VEVENT->ORGANIZER['PARTSTAT'];
-                if (isset($srvObj->VEVENT->ORGANIZER['RSVP']))
-                    $newObj->VEVENT->ORGANIZER['RSVP'] = $srvObj->VEVENT->ORGANIZER['RSVP'];
-                else
-                    unset($newObj->VEVENT->ORGANIZER['RSVP']);
-                if (isset($srvObj->VEVENT->ORGANIZER['SCHEDULE-FORCE-SEND']))
-                    $newObj->VEVENT->ORGANIZER['SCHEDULE-FORCE-SEND'] = $srvObj->VEVENT->ORGANIZER['SCHEDULE-FORCE-SEND'];
-                else
-                    unset($newObj->VEVENT->ORGANIZER['SCHEDULE-FORCE-SEND']);
+        /* Removed to ignore clients that increase SEQUENCE for no reason (DAVdroid)
+        if (isset($newObj->VEVENT->SEQUENCE) && isset($srvObj->VEVENT->SEQUENCE)) {
+            if ($newObj->VEVENT->SEQUENCE->getValue() != $srvObj->VEVENT->SEQUENCE->getValue()) {
+                $newObj->destroy();
+                $srvObj->destroy();
+                return !$hasLatentException;
+            }
+        } else {
+        */
+        foreach(self::$significantproperties as $prop) {
+            if(isset($newObj->$prop) && isset($srvObj->$prop)) {
+                if ($newObj->VEVENT->$prop->getValue() != $srvObj->VEVENT->$prop->getValue()){ // Timezone-proof comparison?
+                    $newObj->destroy();
+                    $srvObj->destroy();
+                    return !$hasLatentException;
+                }
             }
         }
+        /*}*/
 
-        if (isset($newObj->VEVENT->ATTENDEE) && isset($srvObj->VEVENT->ATTENDEE)) {
-            foreach ($newObj->VEVENT->ATTENDEE as $nkey => $newObjAttendee) {
-                foreach ($srvObj->VEVENT->ATTENDEE as $skey => $srvObjAttendee) {
-                    if ($newObjAttendee->getNormalizedValue() === $srvObjAttendee->getNormalizedValue()) {
-                        if (!in_array($newObj->VEVENT->ATTENDEE[$nkey]->getValue(), $currentUserAltUriSet)) {
+        // Actual merge:
 
-                            if (isset($srvObj->VEVENT->ATTENDEE[$skey]['SCHEDULE-STATUS']))
-                                $newObj->VEVENT->ATTENDEE[$nkey]['SCHEDULE-STATUS'] = $srvObj->VEVENT->ATTENDEE[$skey]['SCHEDULE-STATUS'];
-                            if (isset($srvObj->VEVENT->ATTENDEE[$skey]['PARTSTAT']))
-                                $newObj->VEVENT->ATTENDEE[$nkey]['PARTSTAT'] = $srvObj->VEVENT->ATTENDEE[$skey]['PARTSTAT'];
-                            if (isset($srvObj->VEVENT->ATTENDEE[$skey]['RSVP']))
-                                $newObj->VEVENT->ATTENDEE[$nkey]['RSVP'] = $srvObj->VEVENT->ATTENDEE[$skey]['RSVP'];
-                            else
-                                unset($newObj->VEVENT->ATTENDEE[$nkey]['RSVP']);
-                            if (isset($srvObj->VEVENT->ATTENDEE[$skey]['SCHEDULE-FORCE-SEND']))
-                                $newObj->VEVENT->ATTENDEE[$nkey]['SCHEDULE-FORCE-SEND'] = $srvObj->VEVENT->ATTENDEE[$skey]['SCHEDULE-FORCE-SEND'];
-                            else
-                                unset($newObj->VEVENT->ATTENDEE[$nkey]['SCHEDULE-FORCE-SEND']);
+        $currentUserAltUriSet = $this->getCurrentUserPrincipalAlternateUriSet();
+
+        if (!$hasLatentException) {
+
+            // We're here because the user has done a PUT request,
+            // and the server may have processed some attendee
+            // participation status in the meantime (and only that).
+            // So we need to report these changes (except the user itself).
+
+            // We're not using setValue(). OK?
+
+            if (isset($newObj->VEVENT->ORGANIZER) && isset($srvObj->VEVENT->ORGANIZER)) {
+                if (!in_array($newObj->VEVENT->ORGANIZER->getValue(), $currentUserAltUriSet)) {
+                    if (isset($srvObj->VEVENT->ORGANIZER['SCHEDULE-STATUS']))
+                        $newObj->VEVENT->ORGANIZER['SCHEDULE-STATUS'] = $srvObj->VEVENT->ORGANIZER['SCHEDULE-STATUS'];
+                    if (isset($srvObj->VEVENT->ORGANIZER['PARTSTAT']))
+                        $newObj->VEVENT->ORGANIZER['PARTSTAT'] = $srvObj->VEVENT->ORGANIZER['PARTSTAT'];
+                    if (isset($srvObj->VEVENT->ORGANIZER['RSVP']))
+                        $newObj->VEVENT->ORGANIZER['RSVP'] = $srvObj->VEVENT->ORGANIZER['RSVP'];
+                    else
+                        unset($newObj->VEVENT->ORGANIZER['RSVP']);
+                    if (isset($srvObj->VEVENT->ORGANIZER['SCHEDULE-FORCE-SEND']))
+                        $newObj->VEVENT->ORGANIZER['SCHEDULE-FORCE-SEND'] = $srvObj->VEVENT->ORGANIZER['SCHEDULE-FORCE-SEND'];
+                    else
+                        unset($newObj->VEVENT->ORGANIZER['SCHEDULE-FORCE-SEND']);
+             }
+            }
+
+            if (isset($newObj->VEVENT->ATTENDEE) && isset($srvObj->VEVENT->ATTENDEE)) {
+                foreach ($newObj->VEVENT->ATTENDEE as $nkey => $newObjAttendee) {
+                    foreach ($srvObj->VEVENT->ATTENDEE as $skey => $srvObjAttendee) {
+                        if ($newObjAttendee->getNormalizedValue() === $srvObjAttendee->getNormalizedValue()) {
+                            if (!in_array($newObj->VEVENT->ATTENDEE[$nkey]->getValue(), $currentUserAltUriSet)) {
+    
+                                if (isset($srvObj->VEVENT->ATTENDEE[$skey]['SCHEDULE-STATUS']))
+                                    $newObj->VEVENT->ATTENDEE[$nkey]['SCHEDULE-STATUS'] = $srvObj->VEVENT->ATTENDEE[$skey]['SCHEDULE-STATUS'];
+                                if (isset($srvObj->VEVENT->ATTENDEE[$skey]['PARTSTAT']))
+                                    $newObj->VEVENT->ATTENDEE[$nkey]['PARTSTAT'] = $srvObj->VEVENT->ATTENDEE[$skey]['PARTSTAT'];
+                                if (isset($srvObj->VEVENT->ATTENDEE[$skey]['RSVP']))
+                                    $newObj->VEVENT->ATTENDEE[$nkey]['RSVP'] = $srvObj->VEVENT->ATTENDEE[$skey]['RSVP'];
+                                else
+                                    unset($newObj->VEVENT->ATTENDEE[$nkey]['RSVP']);
+                                if (isset($srvObj->VEVENT->ATTENDEE[$skey]['SCHEDULE-FORCE-SEND']))
+                                    $newObj->VEVENT->ATTENDEE[$nkey]['SCHEDULE-FORCE-SEND'] = $srvObj->VEVENT->ATTENDEE[$skey]['SCHEDULE-FORCE-SEND'];
+                                else
+                                    unset($newObj->VEVENT->ATTENDEE[$nkey]['SCHEDULE-FORCE-SEND']);
+                            }
                         }
                     }
                 }
             }
+
+            $data = $newObj->serialize();
+
+        } else {
+
+            // We're here because the user has done a PUT request,
+            // and a Precondition test failed,
+            // but we want to take into account the new user PARTSTAT anyway.
+            // (this is not standard yet useful)
+
+            if (isset($srvObj->VEVENT->ORGANIZER) && isset($newObj->VEVENT->ORGANIZER)) {
+                if (in_array($srvObj->VEVENT->ORGANIZER->getValue(), $currentUserAltUriSet)) {
+                    if (isset($newObj->VEVENT->ORGANIZER['SCHEDULE-STATUS']))
+                        $srvObj->VEVENT->ORGANIZER['SCHEDULE-STATUS'] = $newObj->VEVENT->ORGANIZER['SCHEDULE-STATUS'];
+                    if (isset($newObj->VEVENT->ORGANIZER['PARTSTAT']))
+                        $srvObj->VEVENT->ORGANIZER['PARTSTAT'] = $newObj->VEVENT->ORGANIZER['PARTSTAT'];
+                    if (isset($newObj->VEVENT->ORGANIZER['RSVP']))
+                        $srvObj->VEVENT->ORGANIZER['RSVP'] = $newObj->VEVENT->ORGANIZER['RSVP'];
+                    else
+                        unset($srvObj->VEVENT->ORGANIZER['RSVP']);
+                    if (isset($newObj->VEVENT->ORGANIZER['SCHEDULE-FORCE-SEND']))
+                        $srvObj->VEVENT->ORGANIZER['SCHEDULE-FORCE-SEND'] = $newObj->VEVENT->ORGANIZER['SCHEDULE-FORCE-SEND'];
+                    else
+                        unset($srvObj->VEVENT->ORGANIZER['SCHEDULE-FORCE-SEND']);
+                }
+            }
+
+            if (isset($srvObj->VEVENT->ATTENDEE) && isset($newObj->VEVENT->ATTENDEE)) {
+                foreach ($srvObj->VEVENT->ATTENDEE as $nkey => $srvObjAttendee) {
+                    foreach ($newObj->VEVENT->ATTENDEE as $skey => $newObjAttendee) {
+                        if ($srvObjAttendee->getNormalizedValue() === $newObjAttendee->getNormalizedValue()) {
+                            if (in_array($srvObj->VEVENT->ATTENDEE[$nkey]->getValue(), $currentUserAltUriSet)) {
+
+                                if (isset($newObj->VEVENT->ATTENDEE[$skey]['SCHEDULE-STATUS']))
+                                    $srvObj->VEVENT->ATTENDEE[$nkey]['SCHEDULE-STATUS'] = $newObj->VEVENT->ATTENDEE[$skey]['SCHEDULE-STATUS'];
+                                if (isset($newObj->VEVENT->ATTENDEE[$skey]['PARTSTAT']))
+                                    $srvObj->VEVENT->ATTENDEE[$nkey]['PARTSTAT'] = $newObj->VEVENT->ATTENDEE[$skey]['PARTSTAT'];
+                                if (isset($newObj->VEVENT->ATTENDEE[$skey]['RSVP']))
+                                    $srvObj->VEVENT->ATTENDEE[$nkey]['RSVP'] = $newObj->VEVENT->ATTENDEE[$skey]['RSVP'];
+                                else
+                                    unset($srvObj->VEVENT->ATTENDEE[$nkey]['RSVP']);
+                                if (isset($newObj->VEVENT->ATTENDEE[$skey]['SCHEDULE-FORCE-SEND']))
+                                    $srvObj->VEVENT->ATTENDEE[$nkey]['SCHEDULE-FORCE-SEND'] = $newObj->VEVENT->ATTENDEE[$skey]['SCHEDULE-FORCE-SEND'];
+                                else
+                                    unset($srvObj->VEVENT->ATTENDEE[$nkey]['SCHEDULE-FORCE-SEND']);
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Yes, we'll be returning the serialized SERVER calendar object,
+            // not the user NEW one.
+            $data = $srvObj->serialize();
+
         }
 
-        $data = $newObj->serialize();
         $modified = true;
 
         // Destroy circular references so PHP will garbage collect the object.
         $newObj->destroy();
         $srvObj->destroy();
+        return true;
 
     }
 
@@ -423,26 +503,38 @@ class Plugin extends ServerPlugin {
         list($parent) = Uri\split($path);
         $parentNode = $this->server->tree->getNodeForPath($parent);
 
-        if (!$parentNode instanceof ICalendar)
+        if (!$parentNode instanceof ICalendar) {
+            if(isset($this->server->latentPreconditionFailed))
+                throw $this->server->latentPreconditionFailed; // Just in case.
             return;
+        }
 
         if ($ifMatch = $this->server->httpRequest->getHeader('If-Schedule-Tag-Match')) {
-            
             // If-Schedule-Tag-Match precondition failed
             if ($ifMatch != $node->getScheduleTag())
-                throw new DAV\Exception\PreconditionFailed('An If-Schedule-Tag-Match header was specified, but doesn\'t match.', 'If-Schedule-Tag-Match');
+                if(!isset($this->server->latentPreconditionFailed))
+                    $this->server->latentPreconditionFailed = new DAV\Exception\PreconditionFailed('An If-Schedule-Tag-Match header was specified, but doesn\'t match.', 'If-Schedule-Tag-Match');
+        }
 
-            // Merge current calendar object PARTSTAT with new object PARTSTAT
-            else {
-                $this->mergeICalendarParticipationStatuses(
-                    $node,
-                    $data,
-                    $path,
-                    $modified,
-                    $this->server->httpRequest,
-                    $this->server->httpResponse
-                );
-            }
+        if ($ifMatch || $this->server->latentPreconditionFailed) {
+            // Merge current calendar object ATTENDEE with new object ATTENDEE
+            $mergeSuccess = $this->mergeICalendar(
+                $node,
+                $data,
+                $path,
+                $modified,
+                $this->server->httpRequest,
+                $this->server->httpResponse,
+                isset($this->server->latentPreconditionFailed)
+            );
+
+            // Avoids sending PreconditionFailed if the merge "went well"
+            // Note: Even if it "went well", the merge may have actually ignored some user data
+            //       (eg. conflicting with an organizer's update or since another shared calendar invitee update).
+            //       But we don't throw an error since "I, server, (deemed to have) resolved the conflict.
+            //       Don't you, client, try to resolve the conflict again or we might end up in an infinite loop."
+            if(!$mergeSuccess)
+                throw $this->server->latentPreconditionFailed;
         }
     }
 
