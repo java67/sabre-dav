@@ -184,6 +184,14 @@ class Server extends EventEmitter implements LoggerAwareInterface {
     static $exposeVersion = true;
 
     /**
+     * This is used to store a potential Exception and decide to throw it later,
+     * or not.
+     *
+     * @var null|Exception
+     */
+    public $latentPreconditionFailed = null;
+
+    /**
      * Sets up the server
      *
      * If a Sabre\DAV\Tree object is passed as an argument, it will
@@ -1103,7 +1111,13 @@ class Server extends EventEmitter implements LoggerAwareInterface {
         $modified = false;
         if (!$this->emit('beforeWriteContent', [$uri, $node, &$data, &$modified])) return false;
 
-        $etag = $node->put($data);
+        // An ignored PreconditionFailed limits changes to the user
+        // VEVENT ATTENDEE, hence requiring no schedule-tag update.
+        if ($this->latentPreconditionFailed && $node instanceof \Sabre\CalDAV\ICalendarObject)
+            $etag = $node->put($data, FALSE);
+        else
+            $etag = $node->put($data);
+
         if ($modified) $etag = null;
         $this->emit('afterWriteContent', [$uri, $node]);
 
@@ -1311,7 +1325,9 @@ class Server extends EventEmitter implements LoggerAwareInterface {
                 }
                 if (!$haveMatch) {
                     if ($etag) $response->setHeader('ETag', $etag);
-                     throw new Exception\PreconditionFailed('An If-Match header was specified, but none of the specified the ETags matched.', 'If-Match');
+                    $this->latentPreconditionFailed = new Exception\PreconditionFailed('An If-Match header was specified, but none of the specified the ETags matched.', 'If-Match');
+                    if (!($request->getMethod() == 'PUT' && $this->getPlugin('caldav-schedule') && $node instanceof \Sabre\CalDAV\ICalendarObject))
+                        throw $this->latentPreconditionFailed;
                 }
             }
         }
