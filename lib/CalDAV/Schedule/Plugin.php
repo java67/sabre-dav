@@ -143,23 +143,14 @@ class Plugin extends ServerPlugin {
     }
 
     /**
-     * Returns the standard users' principal.
+     * Returns the principal's alternate URI set
      *
-     * This is one authorative principal url for the current user.
-     * This method will return null if the user wasn't logged in.
-     *
+     * @param string $principal
      * @return string|null
      */
-    function getCurrentUserPrincipalAlternateUriSet() {
+    function getAlternateUriSet($principal) {
 
-        /** @var $authPlugin Sabre\DAV\Auth\Plugin */
-        $authPlugin = $this->server->getPlugin('auth');
-        if (!$authPlugin) {
-            return null;
-        }
-        $currentUser=$authPlugin->getCurrentPrincipal();
-
-        $result = $this->server->getPropertiesForPath($currentUser, ['{DAV:}alternate-URI-set']);
+        $result = $this->server->getPropertiesForPath($principal, ['{DAV:}alternate-URI-set']);
         $result = $result[0];
 
         if (isset($result[200]['{DAV:}alternate-URI-set']))
@@ -362,7 +353,7 @@ class Plugin extends ServerPlugin {
 
         // Actual merge:
 
-        $currentUserAltUriSet = $this->getCurrentUserPrincipalAlternateUriSet();
+        $currentUserAltUriSet = $this->getAlternateUriSet($node->getOwner());
 
         if (!$hasLatentException) {
 
