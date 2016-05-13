@@ -607,7 +607,7 @@ SQL
             $calendarData,
             time(),
             $extraData['etag'],
-            \Sabre\DAV\UUIDUtil::getUUID(),
+            md5(\Sabre\DAV\UUIDUtil::getUUID()),
             $extraData['size'],
             $extraData['componentType'],
             $extraData['firstOccurence'],
