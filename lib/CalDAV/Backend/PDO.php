@@ -41,6 +41,12 @@ class PDO extends AbstractBackend
         $this->limitToParticipant = $limitToParticipant;
     }
 
+    /**
+     * External callback to notify PARTSTAT change.
+     *
+     * @var null|func $partstatCallback
+     */
+    public $partstatCallback = NULL;
 
     /**
      * We need to specify a max date, because we need to stop *somewhere*
@@ -674,10 +680,15 @@ SQL
                                 // Can't find another way to loop through attendees parameters...
                                 if (isset($newattendee->parameters['PARTSTAT'])) {
                                     switch($newattendee->parameters['PARTSTAT']->getValue()) {
-                                        case "NEEDS-ACTION": // TODO RSVP specific
                                         case "ACCEPTED":
                                         case "DECLINED":
                                         case "TENTATIVE":
+                                        	if(isset($this->partstatCallback)) {
+                                        		$callback=$this->partstatCallback;
+                                        		$callback($objectUri, $newattendee->getValue(), $newattendee->parameters['PARTSTAT']->getValue());
+                                    		}
+                                        		
+                                        case "NEEDS-ACTION": // TODO RSVP specific
                                             if(isset($currentattendee->parameters['PARTSTAT'])) unset($currentattendee->parameters['PARTSTAT']);
                                             if(isset($currentattendee->parameters['RSVP'])) unset($currentattendee->parameters['RSVP']);
                                             if(isset($currentattendee->parameters['SCHEDULE-STATUS'])) unset($currentattendee->parameters['SCHEDULE-STATUS']);
