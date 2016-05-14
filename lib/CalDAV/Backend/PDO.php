@@ -711,7 +711,7 @@ SQL
 
         if ($updateScheduleTag) {
             $stmt = $this->pdo->prepare('UPDATE ' . $this->calendarObjectTableName . ' SET calendardata = ?, lastmodified = ?, etag = ?, scheduletag = ?, size = ?, componenttype = ?, firstoccurence = ?, lastoccurence = ?, uid = ? WHERE calendarid = ? AND uri = ?');
-            $stmt->execute([$calendarData, time(), $extraData['etag'], \Sabre\DAV\UUIDUtil::getUUID(), $extraData['size'], $extraData['componentType'], $extraData['firstOccurence'], $extraData['lastOccurence'], $extraData['uid'], $calendarId, $objectUri]);
+            $stmt->execute([$calendarData, time(), $extraData['etag'], md5(\Sabre\DAV\UUIDUtil::getUUID()), $extraData['size'], $extraData['componentType'], $extraData['firstOccurence'], $extraData['lastOccurence'], $extraData['uid'], $calendarId, $objectUri]);
         } else {
             $stmt = $this->pdo->prepare('UPDATE ' . $this->calendarObjectTableName . ' SET calendardata = ?, lastmodified = ?, etag = ?, size = ?, componenttype = ?, firstoccurence = ?, lastoccurence = ?, uid = ? WHERE calendarid = ? AND uri = ?');
             $stmt->execute([$calendarData, time(), $extraData['etag'], $extraData['size'], $extraData['componentType'], $extraData['firstOccurence'], $extraData['lastOccurence'], $extraData['uid'], $calendarId, $objectUri]);
